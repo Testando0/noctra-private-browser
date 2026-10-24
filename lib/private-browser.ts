@@ -66,7 +66,7 @@ export function normalizeDestination(input: string, mode: AddressMode): string |
   if (!value) return null;
 
   if (mode === "search") {
-    return `https://duckduckgo.com/?q=${encodeURIComponent(value)}`;
+    return `noctra://search/${encodeURIComponent(value)}`;
   }
 
   const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -83,8 +83,8 @@ export function displayAddress(url: string | null): string {
   if (!url) return "Pesquise ou digite um endereço";
   try {
     const parsed = new URL(url);
-    if (parsed.hostname === "duckduckgo.com" && parsed.searchParams.has("q")) {
-      return parsed.searchParams.get("q") ?? url;
+    if (parsed.protocol === "noctra:" && parsed.hostname === "search") {
+      return decodeURIComponent(parsed.pathname.replace(/^\//, ""));
     }
     return parsed.host + parsed.pathname.replace(/\/$/, "");
   } catch {

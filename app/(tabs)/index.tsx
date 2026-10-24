@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import {
   Keyboard,
@@ -203,6 +203,80 @@ function BrowserSurface({
   );
 }
 
+type SearchResult = {
+  title: string;
+  url: string;
+  description: string;
+};
+
+function NativeSearchSurface({
+  query,
+  onOpenResult,
+}: {
+  query: string;
+  onOpenResult: (url: string, title: string) => void;
+}) {
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(true);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`)
+      .then((response) => {
+        if (!response.ok) throw new Error("search failed");
+        return response.json();
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        const next: SearchResult[] = [];
+        const collect = (items: unknown[]) => {
+          items.forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            const value = item as { FirstURL?: string; Text?: string; Topics?: unknown[] };
+            if (value.FirstURL && value.Text) {
+              next.push({ title: value.Text.split(" - ")[0], url: value.FirstURL, description: value.Text });
+            }
+            if (Array.isArray(value.Topics)) collect(value.Topics);
+          });
+        };
+        collect(Array.isArray(payload.RelatedTopics) ? payload.RelatedTopics : []);
+        if (payload.AbstractURL && payload.AbstractText) {
+          next.unshift({ title: payload.Heading || query, url: payload.AbstractURL, description: payload.AbstractText });
+        }
+        setResults(next.slice(0, 12));
+        setIsSearching(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHasError(true);
+          setIsSearching(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [query]);
+
+  if (isSearching) {
+    return <View style={styles.searchState}><View style={styles.loadingDot} /><Text style={styles.searchStateTitle}>Procurando com cuidado</Text><Text style={styles.searchStateCopy}>Os resultados aparecem aqui, sem abrir outro site.</Text></View>;
+  }
+
+  if (hasError) {
+    return <View style={styles.searchState}><Ionicons name="cloud-offline-outline" size={32} color={COLORS.muted} /><Text style={styles.searchStateTitle}>A busca não respondeu</Text><Text style={styles.searchStateCopy}>Confira sua conexão e tente pesquisar novamente.</Text></View>;
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.resultsContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.resultsHeader}><Text style={styles.resultsEyebrow}>RESULTADOS PRIVADOS</Text><Text style={styles.resultsTitle}>Sobre “{query}”</Text><Text style={styles.resultsMeta}>{results.length ? `${results.length} descobertas para você` : "Ainda não encontrei uma resposta direta"}</Text></View>
+      {results.length ? results.map((result, index) => (
+        <Pressable key={`${result.url}-${index}`} accessibilityRole="button" accessibilityLabel={`Abrir ${result.title}`} onPress={() => onOpenResult(result.url, result.title)} style={({ pressed }) => [styles.resultCard, pressed && styles.pressed]}>
+          <View style={styles.resultIcon}><Ionicons name="arrow-up-right-box" size={17} color={COLORS.purpleSoft} /></View>
+          <View style={styles.resultBody}><Text numberOfLines={2} style={styles.resultTitle}>{result.title}</Text><Text numberOfLines={1} style={styles.resultUrl}>{result.url.replace(/^https?:\/\//, "").split("/")[0]}</Text><Text numberOfLines={2} style={styles.resultDescription}>{result.description}</Text></View>
+        </Pressable>
+      )) : <View style={styles.noResults}><Ionicons name="search-outline" size={28} color={COLORS.muted} /><Text style={styles.searchStateTitle}>Nada apareceu por enquanto</Text><Text style={styles.searchStateCopy}>Tente palavras mais específicas ou digite um endereço completo.</Text></View>}
+    </ScrollView>
+  );
+}
+
 export default function HomeScreen() {
   const initialTab = useMemo(() => newTab(), []);
   const [tabs, setTabs] = useState<BrowserTab[]>([initialTab]);
@@ -216,6 +290,7 @@ export default function HomeScreen() {
   const [showPrivacyInfo, setShowPrivacyInfo] = useState(false);
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>([]);
   const [pageError, setPageError] = useState(false);
+  const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const webViewRef = useRef<WebView>(null);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
@@ -224,6 +299,16 @@ export default function HomeScreen() {
   }, [activeTabId]);
 
   const submitAddress = useCallback(() => {
+    if (addressMode === "search") {
+      const query = addressValue.trim();
+      if (!query) { setPageError(true); return; }
+      Keyboard.dismiss();
+      setIsFocused(false);
+      setPageError(false);
+      setSearchQuery(query);
+      setSessionHistory((current) => [{ id: `${Date.now()}-${query}`, title: query, url: `noctra://search/${encodeURIComponent(query)}` }, ...current.filter((entry) => entry.title !== query)].slice(0, 30));
+      return;
+    }
     const destination = normalizeDestination(addressValue, addressMode);
     if (!destination) {
       setPageError(true);
@@ -234,6 +319,13 @@ export default function HomeScreen() {
     setPageError(false);
     updateActiveTab({ url: destination, title: tabTitle(destination) });
   }, [addressMode, addressValue, updateActiveTab]);
+
+  const openSearchResult = useCallback((url: string, title: string) => {
+    setSearchQuery(null);
+    setAddressMode("url");
+    setAddressValue(displayAddress(url));
+    updateActiveTab({ url, title });
+  }, [updateActiveTab]);
 
   const handleNavigationStateChange = useCallback(
     (state: WebViewNavigation) => {
@@ -285,6 +377,13 @@ export default function HomeScreen() {
   }, [activeTabId]);
 
   const openHistoryItem = useCallback((url: string) => {
+    if (url.startsWith("noctra://search/")) {
+      setSearchQuery(displayAddress(url));
+      setAddressMode("search");
+      setAddressValue(displayAddress(url));
+      setShowHistory(false);
+      return;
+    }
     setAddressMode("url");
     setAddressValue(url);
     setShowHistory(false);
@@ -335,7 +434,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.content}>
-          {activeTab.url ? (
+          {searchQuery ? <NativeSearchSurface key={searchQuery} query={searchQuery} onOpenResult={openSearchResult} /> : activeTab.url ? (
             <View style={styles.browserFrame}>
               {isLoading && <View style={styles.progressLine} />}
               <BrowserSurface
@@ -406,6 +505,22 @@ const styles = StyleSheet.create({
   modeHint: { alignItems: "center", flexDirection: "row", gap: 4, padding: 4 },
   modeHintText: { color: COLORS.pink, fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
   content: { backgroundColor: COLORS.panel, borderColor: COLORS.line, borderRadius: 22, borderWidth: 1, flex: 1, overflow: "hidden" },
+  resultsContent: { padding: 18, paddingBottom: 28 },
+  resultsHeader: { paddingBottom: 14, paddingHorizontal: 2 },
+  resultsEyebrow: { color: COLORS.pink, fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
+  resultsTitle: { color: COLORS.text, fontSize: 22, fontWeight: "800", marginTop: 6 },
+  resultsMeta: { color: COLORS.muted, fontSize: 12, marginTop: 5 },
+  resultCard: { alignItems: "flex-start", backgroundColor: COLORS.fieldSoft, borderColor: COLORS.line, borderRadius: 17, borderWidth: 1, flexDirection: "row", marginTop: 9, padding: 13 },
+  resultIcon: { alignItems: "center", backgroundColor: "#30233d", borderRadius: 11, height: 34, justifyContent: "center", width: 34 },
+  resultBody: { flex: 1, marginLeft: 11 },
+  resultTitle: { color: COLORS.text, fontSize: 14, fontWeight: "800", lineHeight: 19 },
+  resultUrl: { color: COLORS.purpleSoft, fontSize: 10, marginTop: 4 },
+  resultDescription: { color: COLORS.muted, fontSize: 11, lineHeight: 16, marginTop: 6 },
+  searchState: { alignItems: "center", flex: 1, justifyContent: "center", padding: 30 },
+  loadingDot: { backgroundColor: COLORS.pink, borderRadius: 12, height: 18, marginBottom: 18, shadowColor: COLORS.pink, shadowOpacity: 0.8, shadowRadius: 16, width: 18 },
+  searchStateTitle: { color: COLORS.text, fontSize: 16, fontWeight: "800", marginTop: 12, textAlign: "center" },
+  searchStateCopy: { color: COLORS.muted, fontSize: 12, lineHeight: 18, marginTop: 6, maxWidth: 270, textAlign: "center" },
+  noResults: { alignItems: "center", paddingHorizontal: 18, paddingVertical: 45 },
   emptyState: { alignItems: "center", flex: 1, justifyContent: "center", paddingHorizontal: 32 },
   logoOrb: { alignItems: "center", backgroundColor: COLORS.purple, borderColor: COLORS.pink, borderRadius: 52, borderWidth: 5, height: 104, justifyContent: "center", marginBottom: 26, shadowColor: COLORS.pink, shadowOpacity: 0.6, shadowRadius: 24, width: 104 },
   logoOrbInner: { alignItems: "center", justifyContent: "center" },
