@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Build debug APK
+    name: Build optimized release APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -33,25 +33,65 @@ jobs:
       - name: Generate native Android project
         run: pnpm exec expo prebuild --platform android --no-install --non-interactive
 
-      - name: Build debug APK
+      - name: Build optimized release APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload APK artifact
+      - name: Align and sign release APK for testing
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_DIR="android/app/build/outputs/apk/release"
+          UNSIGNED="$(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*unsigned*.apk' | head -1)"
+          if [ -z "$UNSIGNED" ]; then
+            UNSIGNED="$RELEASE_DIR/app-release.apk"
+          fi
+          if [ ! -f "$UNSIGNED" ]; then
+            echo "Release APK not found in $RELEASE_DIR"
+            find android/app/build/outputs -type f -name '*.apk' -print
+            exit 1
+          fi
+
+          KEYSTORE="$RUNNER_TEMP/noctra-debug.keystore"
+          keytool -genkeypair -v \
+            -keystore "$KEYSTORE" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          ALIGNED="$RELEASE_DIR/noctra-release-aligned.apk"
+          SIGNED="$RELEASE_DIR/noctra-private-browser.apk"
+          "$ZIPALIGN" -f 4 "$UNSIGNED" "$ALIGNED"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$SIGNED" \
+            "$ALIGNED"
+          "$APKSIGNER" verify --verbose "$SIGNED"
+          rm -f "$ALIGNED"
+
+      - name: Upload optimized APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: noctra-debug-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: noctra-release-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/noctra-private-browser.apk
           if-no-files-found: error
 
-      - name: Publish APK release asset
+      - name: Publish optimized APK release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="noctra-apk-${GITHUB_RUN_NUMBER}"
+          TAG="noctra-release-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
-            android/app/build/outputs/apk/debug/app-debug.apk \
+            android/app/build/outputs/apk/release/noctra-private-browser.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Noctra Android APK ${GITHUB_RUN_NUMBER}" \
-            --notes "APK debug gerado automaticamente a partir do commit ${GITHUB_SHA}. Este build é uma versão de teste; a integração Tor real ainda não está incluída." \
+            --title "Noctra optimized Android APK ${GITHUB_RUN_NUMBER}" \
+            --notes "APK release assinado para testes, gerado a partir do commit ${GITHUB_SHA}. Compatível com arm64-v8a e armeabi-v7a. A integração Tor real ainda não está incluída." \
             --target "$GITHUB_SHA"
