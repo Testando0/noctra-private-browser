@@ -2,8 +2,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Keyboard,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,8 +21,6 @@ import {
   type AddressMode,
 } from "@/lib/private-browser";
 
-// react-native-webview 14 exposes a legacy generic component signature that
-// resolves to `never` with the React 19 types bundled by Expo 57.
 type BrowserTab = {
   id: string;
   url: string | null;
@@ -304,6 +304,7 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [pageVersion, setPageVersion] = useState(0);
   const addressInputRef = useRef<TextInput>(null);
+  const [showAddressEditor, setShowAddressEditor] = useState(false);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
   const updateActiveTab = useCallback((patch: Partial<BrowserTab>) => {
@@ -316,6 +317,7 @@ export default function HomeScreen() {
       if (!query) { setPageError(true); return; }
       Keyboard.dismiss();
       setIsFocused(false);
+      setShowAddressEditor(false);
       setPageError(false);
       setSearchQuery(query);
       setSessionHistory((current) => [{ id: `${Date.now()}-${query}`, title: query, url: `noctra://search/${encodeURIComponent(query)}` }, ...current.filter((entry) => entry.title !== query)].slice(0, 30));
@@ -328,6 +330,7 @@ export default function HomeScreen() {
     }
     Keyboard.dismiss();
     setIsFocused(false);
+    setShowAddressEditor(false);
     setPageError(false);
     updateActiveTab({ url: destination, title: tabTitle(destination) });
   }, [addressMode, addressValue, updateActiveTab]);
@@ -432,17 +435,20 @@ export default function HomeScreen() {
           <Pressable accessibilityRole="button" accessibilityLabel={addressMode === "search" ? "Modo de pesquisa" : "Modo de endereço"} onPress={() => setAddressMode((current) => current === "search" ? "url" : "search")} style={styles.modeButton}>
             <Ionicons name={addressMode === "search" ? "search-outline" : "globe-outline"} size={18} color={COLORS.purpleSoft} /><Ionicons name="chevron-down" size={12} color={COLORS.muted} />
           </Pressable>
-          <TextInput
-            ref={addressInputRef}
-            accessibilityLabel={addressMode === "search" ? "Pesquisar na web" : "Endereço da página"}
-            autoCapitalize="none" autoCorrect={false} blurOnSubmit={false} keyboardType="url" showSoftInputOnFocus
-            onBlur={() => setIsFocused(false)} onChangeText={setAddressValue} onFocus={() => setIsFocused(true)} onPressIn={() => { requestAnimationFrame(() => addressInputRef.current?.focus()); }} onSubmitEditing={submitAddress}
-            placeholder={addressMode === "search" ? "Pesquisar com privacidade" : "https://endereco.com"} placeholderTextColor={COLORS.muted}
-            returnKeyType="go" selectionColor={COLORS.pink} style={styles.addressInput} value={addressValue}
-          />
+          <Pressable accessibilityRole="button" accessibilityLabel={addressMode === "search" ? "Abrir campo de pesquisa" : "Abrir campo de endereço"} onPress={() => { setIsFocused(true); setShowAddressEditor(true); }} style={styles.addressInput}>
+            <Text numberOfLines={1} style={addressValue ? styles.addressValue : styles.addressPlaceholder}>{addressValue || (addressMode === "search" ? "Pesquisar com privacidade" : "https://endereco.com")}</Text>
+          </Pressable>
           {!!addressValue && <Pressable accessibilityLabel="Limpar campo de endereço" onPress={() => setAddressValue("")} style={styles.clearButton}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable>}
           <Pressable accessibilityRole="button" accessibilityLabel="Abrir endereço" onPress={submitAddress} style={({ pressed }) => [styles.goButton, pressed && styles.pressed]}><Ionicons name="arrow-up" size={18} color={COLORS.text} /></Pressable>
         </View>
+
+        <Modal visible={showAddressEditor} animationType="slide" onRequestClose={() => { Keyboard.dismiss(); setShowAddressEditor(false); }} onShow={() => { setTimeout(() => addressInputRef.current?.focus(), 120); }}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.editorRoot}>
+            <View style={styles.editorHeader}><Pressable accessibilityRole="button" accessibilityLabel="Fechar pesquisa" onPress={() => { Keyboard.dismiss(); setShowAddressEditor(false); }} style={styles.editorClose}><Ionicons name="close" size={23} color={COLORS.text} /></Pressable><Text style={styles.editorTitle}>{addressMode === "search" ? "Pesquisar" : "Abrir endereço"}</Text><Pressable accessibilityRole="button" accessibilityLabel="Enviar pesquisa" onPress={submitAddress} style={styles.editorGo}><Ionicons name="arrow-up" size={19} color={COLORS.text} /></Pressable></View>
+            <View style={styles.editorField}><Ionicons name={addressMode === "search" ? "search-outline" : "globe-outline"} size={20} color={COLORS.purpleSoft} /><TextInput ref={addressInputRef} accessibilityLabel={addressMode === "search" ? "Pesquisar na web" : "Endereço da página"} autoCapitalize="none" autoCorrect={false} blurOnSubmit={false} keyboardType="url" autoFocus returnKeyType="go" selectionColor={COLORS.pink} style={styles.editorInput} value={addressValue} onChangeText={setAddressValue} onSubmitEditing={submitAddress} placeholder={addressMode === "search" ? "O que você quer encontrar?" : "https://endereco.com"} placeholderTextColor={COLORS.muted} /></View>
+            <Text style={styles.editorHint}>{addressMode === "search" ? "A busca fica dentro do Noctra, sem abrir outra página." : "O conteúdo será reconstruído no leitor nativo."}</Text>
+          </KeyboardAvoidingView>
+        </Modal>
 
         <View style={styles.statusRow}>
           <View style={styles.statusLeft}><Ionicons name="shield-checkmark" size={15} color={COLORS.purpleSoft} /><Text style={styles.statusText}>proteção local ativa</Text></View>
@@ -514,6 +520,16 @@ const styles = StyleSheet.create({
   addressBarFocused: { borderColor: COLORS.purpleSoft, shadowColor: COLORS.purple, shadowOpacity: 0.28, shadowRadius: 10 },
   modeButton: { alignItems: "center", flexDirection: "row", gap: 2, padding: 9 },
   addressInput: { color: COLORS.text, flex: 1, fontSize: 16, height: 54, paddingHorizontal: 7 },
+  addressValue: { color: COLORS.text, fontSize: 16, paddingHorizontal: 7 },
+  addressPlaceholder: { color: COLORS.muted, fontSize: 16, paddingHorizontal: 7 },
+  editorRoot: { backgroundColor: COLORS.bg, flex: 1, padding: 18, paddingTop: 26 },
+  editorHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 24 },
+  editorClose: { alignItems: "center", borderRadius: 13, height: 44, justifyContent: "center", width: 44 },
+  editorTitle: { color: COLORS.text, fontSize: 18, fontWeight: "800" },
+  editorGo: { alignItems: "center", backgroundColor: COLORS.purple, borderRadius: 13, height: 44, justifyContent: "center", width: 44 },
+  editorField: { alignItems: "center", backgroundColor: COLORS.field, borderColor: COLORS.purpleSoft, borderRadius: 18, borderWidth: 1, flexDirection: "row", minHeight: 60, paddingHorizontal: 15 },
+  editorInput: { color: COLORS.text, flex: 1, fontSize: 17, height: 58, marginLeft: 10 },
+  editorHint: { color: COLORS.muted, fontSize: 12, lineHeight: 18, marginTop: 14, paddingHorizontal: 4 },
   clearButton: { padding: 7 },
   goButton: { alignItems: "center", backgroundColor: COLORS.purple, borderRadius: 15, height: 42, justifyContent: "center", width: 42 },
   statusRow: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: 10, marginTop: 10, paddingHorizontal: 5 },
