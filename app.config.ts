@@ -59,15 +59,16 @@ const publicRuntime = {
   apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
 };
 
-const config: ExpoConfig = {
+const config = {
   name: env.appName,
   slug: env.appSlug,
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519663974858310/XPfYdLwfHbOJNuvk.png",
   version: "1.0.0",
   extra: publicRuntime,
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
-  userInterfaceStyle: "automatic",
+  userInterfaceStyle: "dark",
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
@@ -77,7 +78,7 @@ const config: ExpoConfig = {
   },
   android: {
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
+      backgroundColor: "#070609",
       foregroundImage: "./assets/images/android-icon-foreground.png",
       backgroundImage: "./assets/images/android-icon-background.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
@@ -126,10 +127,7 @@ const config: ExpoConfig = {
         image: "./assets/images/splash-icon.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
-        dark: {
-          backgroundColor: "#000000",
-        },
+        backgroundColor: "#070609",
       },
     ],
     [
@@ -146,6 +144,6 @@ const config: ExpoConfig = {
     typedRoutes: true,
     reactCompiler: true,
   },
-};
+} satisfies ExpoConfig & { logoUrl: string };
 
 export default config;
