@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Keyboard,
   Linking,
@@ -303,6 +303,7 @@ export default function HomeScreen() {
   const [pageError, setPageError] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [pageVersion, setPageVersion] = useState(0);
+  const addressInputRef = useRef<TextInput>(null);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
   const updateActiveTab = useCallback((patch: Partial<BrowserTab>) => {
@@ -432,9 +433,10 @@ export default function HomeScreen() {
             <Ionicons name={addressMode === "search" ? "search-outline" : "globe-outline"} size={18} color={COLORS.purpleSoft} /><Ionicons name="chevron-down" size={12} color={COLORS.muted} />
           </Pressable>
           <TextInput
+            ref={addressInputRef}
             accessibilityLabel={addressMode === "search" ? "Pesquisar na web" : "Endereço da página"}
-            autoCapitalize="none" autoCorrect={false} blurOnSubmit={false} keyboardType="url"
-            onBlur={() => setIsFocused(false)} onChangeText={setAddressValue} onFocus={() => setIsFocused(true)} onSubmitEditing={submitAddress}
+            autoCapitalize="none" autoCorrect={false} blurOnSubmit={false} keyboardType="url" showSoftInputOnFocus
+            onBlur={() => setIsFocused(false)} onChangeText={setAddressValue} onFocus={() => setIsFocused(true)} onPressIn={() => { requestAnimationFrame(() => addressInputRef.current?.focus()); }} onSubmitEditing={submitAddress}
             placeholder={addressMode === "search" ? "Pesquisar com privacidade" : "https://endereco.com"} placeholderTextColor={COLORS.muted}
             returnKeyType="go" selectionColor={COLORS.pink} style={styles.addressInput} value={addressValue}
           />
