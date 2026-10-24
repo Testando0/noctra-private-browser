@@ -1,0 +1,50 @@
+name: Build Noctra Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout public repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate native Android project
+        run: pnpm exec expo prebuild --platform android --no-install --non-interactive
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Publish APK release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="noctra-apk-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Noctra Android APK ${GITHUB_RUN_NUMBER}" \
+            --notes "APK debug gerado automaticamente a partir do commit ${GITHUB_SHA}. Este build é uma versão de teste; a integração Tor real ainda não está incluída." \
+            --target "$GITHUB_SHA"
