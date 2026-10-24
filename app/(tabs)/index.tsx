@@ -1,11 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Keyboard,
   Linking,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,21 +11,16 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { WebView, type WebViewNavigation } from "react-native-webview";
 import { ScreenContainer } from "@/components/screen-container";
 import {
   displayAddress,
-  isTrackerUrl,
   normalizeDestination,
   tabTitle,
-  TRACKER_INJECTION,
   type AddressMode,
 } from "@/lib/private-browser";
 
 // react-native-webview 14 exposes a legacy generic component signature that
 // resolves to `never` with the React 19 types bundled by Expo 57.
-const NativeWebView = WebView as unknown as ComponentType<any>;
-
 type BrowserTab = {
   id: string;
   url: string | null;
@@ -128,86 +121,104 @@ function EmptyBrowser({ onFocus }: { onFocus: () => void }) {
   );
 }
 
-function BrowserSurface({
-  url,
-  onLoadStart,
-  onLoadEnd,
-  onError,
-  onHttpError,
-  onNavigationStateChange,
-  onShouldStartLoadWithRequest,
-  webViewRef,
-}: {
-  url: string;
-  onLoadStart: () => void;
-  onLoadEnd: () => void;
-  onError: () => void;
-  onHttpError: () => void;
-  onNavigationStateChange: (state: WebViewNavigation) => void;
-  onShouldStartLoadWithRequest: (request: { url: string }) => boolean;
-  webViewRef: React.RefObject<WebView | null>;
-}) {
-  if (Platform.OS === "web") {
-    return (
-      <View style={styles.webSurface}>
-        {isTrackerUrl(url) ? (
-          <View style={styles.pageMessage}>
-            <Ionicons name="shield-checkmark-outline" size={35} color={COLORS.purpleSoft} />
-            <Text style={styles.pageMessageTitle}>Destino bloqueado</Text>
-            <Text style={styles.pageMessageCopy}>
-              Este endereço parece ser um endpoint de rastreamento e foi bloqueado pela camada básica do Noctra.
-            </Text>
-          </View>
-        ) : (
-          <iframe
-            title="Noctra private browser"
-            src={url}
-            onLoad={onLoadEnd}
-            style={{ border: "none", width: "100%", height: "100%", backgroundColor: COLORS.bg }}
-          />
-        )}
-      </View>
-    );
-  }
-
-  return (
-    <NativeWebView
-      ref={webViewRef}
-      source={{ uri: url }}
-      style={styles.webSurface}
-      originWhitelist={["http://*", "https://*"]}
-      incognito
-      cacheEnabled={false}
-      cacheMode="LOAD_NO_CACHE"
-      thirdPartyCookiesEnabled={false}
-      sharedCookiesEnabled={false}
-      setSupportMultipleWindows={false}
-      allowsBackForwardNavigationGestures
-      javaScriptEnabled
-      domStorageEnabled={false}
-      injectedJavaScriptBeforeContentLoaded={TRACKER_INJECTION}
-      onLoadStart={onLoadStart}
-      onLoadEnd={onLoadEnd}
-      onError={onError}
-      onHttpError={onHttpError}
-      onNavigationStateChange={onNavigationStateChange}
-      onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
-      renderError={() => (
-        <View style={styles.pageMessage}>
-          <Ionicons name="cloud-offline-outline" size={35} color={COLORS.danger} />
-          <Text style={styles.pageMessageTitle}>Não foi possível abrir</Text>
-          <Text style={styles.pageMessageCopy}>Verifique sua conexão e tente novamente.</Text>
-        </View>
-      )}
-    />
-  );
-}
-
 type SearchResult = {
   title: string;
   url: string;
   description: string;
 };
+
+type NativePageLink = {
+  label: string;
+  url: string;
+};
+
+type NativePageData = {
+  title: string;
+  description: string;
+  paragraphs: string[];
+  links: NativePageLink[];
+};
+
+function cleanPageText(value: string) {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseNativePage(html: string, sourceUrl: string): NativePageData {
+  const title = cleanPageText(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "Página sem título") || "Página sem título";
+  const description = cleanPageText(html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)?.[1] || "");
+  const blocks = [...html.matchAll(/<(?:p|h1|h2|h3|article|section|li)[^>]*>([\s\S]*?)<\/(?:p|h1|h2|h3|article|section|li)>/gi)]
+    .map((match) => cleanPageText(match[1]))
+    .filter((text) => text.length > 35)
+    .filter((text, index, all) => all.indexOf(text) === index)
+    .slice(0, 40);
+  const links = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+    .map((match) => ({ label: cleanPageText(match[2]), url: match[1] }))
+    .filter((link) => link.label.length > 1 && !link.url.startsWith("#"))
+    .map((link) => ({ ...link, url: new URL(link.url, sourceUrl).toString() }))
+    .filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index)
+    .slice(0, 16);
+  return { title, description, paragraphs: blocks, links };
+}
+
+function NativePageSurface({
+  url,
+  onLoadStart,
+  onLoadEnd,
+  onError,
+  onOpenLink,
+}: {
+  url: string;
+  onLoadStart: () => void;
+  onLoadEnd: (data: NativePageData) => void;
+  onError: () => void;
+  onOpenLink: (url: string) => void;
+}) {
+  const [page, setPage] = useState<NativePageData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    onLoadStart();
+    fetch(url, { headers: { Accept: "text/html,application/xhtml+xml" } })
+      .then((response) => {
+        if (!response.ok) throw new Error("page unavailable");
+        return response.text();
+      })
+      .then((html) => {
+        if (cancelled) return;
+        const data = parseNativePage(html, url);
+        setPage(data);
+        setIsLoading(false);
+        onLoadEnd(data);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+          onError();
+        }
+      });
+    return () => { cancelled = true; };
+  }, [onError, onLoadEnd, onLoadStart, url]);
+
+  if (isLoading) return <View style={styles.searchState}><View style={styles.loadingDot} /><Text style={styles.searchStateTitle}>Preparando uma leitura limpa</Text><Text style={styles.searchStateCopy}>O Noctra está reconstruindo esta página com elementos nativos.</Text></View>;
+  if (!page) return null;
+
+  return <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
+    <View style={styles.pageHeader}><Text style={styles.pageEyebrow}>LEITURA NATIVA</Text><Text style={styles.pageTitle}>{page.title}</Text><Text style={styles.pageDomain}>{new URL(url).hostname}</Text>{page.description ? <Text style={styles.pageLead}>{page.description}</Text> : null}</View>
+    {page.paragraphs.length ? page.paragraphs.map((paragraph, index) => <Text key={`${paragraph.slice(0, 20)}-${index}`} style={styles.pageParagraph}>{paragraph}</Text>) : <Text style={styles.pageParagraph}>Esta página não entregou texto legível para o modo nativo.</Text>}
+    {page.links.length ? <View style={styles.nativeLinks}><Text style={styles.linksTitle}>Links desta página</Text>{page.links.map((link, index) => <Pressable key={`${link.url}-${index}`} onPress={() => onOpenLink(link.url)} style={({ pressed }) => [styles.nativeLink, pressed && styles.pressed]}><Ionicons name="link-outline" size={16} color={COLORS.purpleSoft} /><Text numberOfLines={2} style={styles.nativeLinkText}>{link.label}</Text><Ionicons name="chevron-forward" size={15} color={COLORS.muted} /></Pressable>)}</View> : null}
+  </ScrollView>;
+}
 
 function NativeSearchSurface({
   query,
@@ -291,7 +302,7 @@ export default function HomeScreen() {
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>([]);
   const [pageError, setPageError] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
-  const webViewRef = useRef<WebView>(null);
+  const [pageVersion, setPageVersion] = useState(0);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
 
   const updateActiveTab = useCallback((patch: Partial<BrowserTab>) => {
@@ -327,25 +338,28 @@ export default function HomeScreen() {
     updateActiveTab({ url, title });
   }, [updateActiveTab]);
 
-  const handleNavigationStateChange = useCallback(
-    (state: WebViewNavigation) => {
-      if (isTrackerUrl(state.url)) return;
-      updateActiveTab({
-        url: state.url,
-        title: state.title || tabTitle(state.url),
-        canGoBack: state.canGoBack,
-        canGoForward: state.canGoForward,
-      });
-      setAddressMode("url");
-      setAddressValue(displayAddress(state.url));
-      setPageError(false);
-      setSessionHistory((current) => {
-        const item = { id: `${Date.now()}-${state.url}`, title: state.title || tabTitle(state.url), url: state.url };
-        return [item, ...current.filter((entry) => entry.url !== state.url)].slice(0, 30);
-      });
-    },
-    [updateActiveTab],
-  );
+  const openNativeLink = useCallback((url: string) => {
+    setPageError(false);
+    setAddressMode("url");
+    setAddressValue(displayAddress(url));
+    updateActiveTab({ url, title: tabTitle(url) });
+  }, [updateActiveTab]);
+
+  const handleNativePageLoaded = useCallback((data: NativePageData) => {
+    setIsLoading(false);
+    updateActiveTab({ title: data.title });
+    setPageError(false);
+  }, [updateActiveTab]);
+
+  const handleNativePageStart = useCallback(() => {
+    setIsLoading(true);
+    setPageError(false);
+  }, []);
+
+  const handleNativePageError = useCallback(() => {
+    setIsLoading(false);
+    setPageError(true);
+  }, []);
 
   const openNewTab = useCallback(() => {
     const fresh = newTab();
@@ -437,11 +451,12 @@ export default function HomeScreen() {
           {searchQuery ? <NativeSearchSurface key={searchQuery} query={searchQuery} onOpenResult={openSearchResult} /> : activeTab.url ? (
             <View style={styles.browserFrame}>
               {isLoading && <View style={styles.progressLine} />}
-              <BrowserSurface
+              <NativePageSurface
+                key={`${activeTab.url}-${pageVersion}`}
                 url={activeTab.url}
-                onLoadStart={() => { setIsLoading(true); setPageError(false); }}
-                onLoadEnd={() => setIsLoading(false)} onError={() => { setIsLoading(false); setPageError(true); }} onHttpError={() => setPageError(true)}
-                onNavigationStateChange={handleNavigationStateChange} onShouldStartLoadWithRequest={(request) => !isTrackerUrl(request.url)} webViewRef={webViewRef}
+                onLoadStart={handleNativePageStart}
+                onLoadEnd={handleNativePageLoaded} onError={handleNativePageError}
+                onOpenLink={openNativeLink}
               />
               {pageError && <View style={styles.inlineError}><Ionicons name="warning-outline" size={20} color={COLORS.warning} /><Text style={styles.inlineErrorText}>Página indisponível ou endereço inválido.</Text><Pressable onPress={submitAddress} style={styles.retryButton}><Text style={styles.retryText}>Tentar</Text></Pressable></View>}
             </View>
@@ -452,9 +467,9 @@ export default function HomeScreen() {
           {privacyStats.map((stat) => <View key={stat.label} style={styles.statItem}><Ionicons name={stat.icon} size={15} color={COLORS.muted} /><Text style={styles.statValue}>{stat.value}</Text><Text style={styles.statLabel}>{stat.label}</Text></View>)}
         </View>
         <View style={styles.bottomBar}>
-          <IconButton name="chevron-back" label="Voltar na página" disabled={!activeTab.canGoBack} onPress={() => webViewRef.current?.goBack()} />
-          <IconButton name="chevron-forward" label="Avançar na página" disabled={!activeTab.canGoForward} onPress={() => webViewRef.current?.goForward()} />
-          <IconButton name="refresh-outline" label="Recarregar página" onPress={() => webViewRef.current?.reload()} />
+          <IconButton name="chevron-back" label="Voltar na página" disabled={!activeTab.canGoBack} onPress={() => {}} />
+          <IconButton name="chevron-forward" label="Avançar na página" disabled={!activeTab.canGoForward} onPress={() => {}} />
+          <IconButton name="refresh-outline" label="Recarregar página" onPress={() => setPageVersion((current) => current + 1)} />
           <IconButton name="time-outline" label="Abrir histórico da sessão" onPress={() => setShowHistory(true)} />
           <Pressable accessibilityRole="button" accessibilityLabel={`Abrir abas privadas, ${tabs.length} abertas`} onPress={() => setShowTabs(true)} style={({ pressed }) => [styles.tabsButton, pressed && styles.pressed]}><Ionicons name="copy-outline" size={19} color={COLORS.text} /><Text style={styles.tabsCount}>{tabs.length}</Text></Pressable>
           <IconButton name="add" label="Nova aba privada" accent onPress={openNewTab} />
@@ -465,7 +480,7 @@ export default function HomeScreen() {
       <Modal visible={showTabs} transparent animationType="slide" onRequestClose={() => setShowTabs(false)}>
         <View style={styles.modalBackdrop}><Pressable style={StyleSheet.absoluteFill} onPress={() => setShowTabs(false)} /><View style={styles.sheet}><View style={styles.sheetHandle} /><View style={styles.sheetHeader}><View><Text style={styles.sheetEyebrow}>ESPAÇO DESCARTÁVEL</Text><Text style={styles.sheetTitle}>Abas privadas</Text></View><IconButton name="close" label="Fechar painel de abas" onPress={() => setShowTabs(false)} /></View><ScrollView contentContainerStyle={styles.sheetList}>
           {tabs.map((tab, index) => <Pressable key={tab.id} accessibilityRole="button" accessibilityLabel={`Selecionar ${tab.title}`} onPress={() => { setActiveTabId(tab.id); setAddressMode(tab.url ? "url" : "search"); setAddressValue(tab.url ? displayAddress(tab.url) : ""); setShowTabs(false); }} style={({ pressed }) => [styles.tabCard, tab.id === activeTabId && styles.tabCardActive, pressed && styles.pressed]}><View style={styles.tabCardIcon}><Ionicons name={tab.url ? "globe-outline" : "sparkles-outline"} size={19} color={COLORS.purpleSoft} /></View><View style={styles.tabCardBody}><Text numberOfLines={1} style={styles.tabCardTitle}>{tab.title}</Text><Text numberOfLines={1} style={styles.tabCardUrl}>{tab.url ? displayAddress(tab.url) : "Pronta para pesquisar"}</Text></View><Pressable accessibilityRole="button" accessibilityLabel={`Fechar aba ${index + 1}`} hitSlop={8} onPress={() => closeTab(tab.id)} style={styles.tabClose}><Ionicons name="close" size={18} color={COLORS.muted} /></Pressable></Pressable>)}
-        </ScrollView><Pressable accessibilityRole="button" accessibilityLabel="Abrir nova aba privada" onPress={openNewTab} style={styles.sheetAction}><Ionicons name="add-circle-outline" size={20} color={COLORS.text} /><Text style={styles.sheetActionText}>Nova aba privada</Text></Pressable><Text style={styles.sheetFootnote}>Fechar uma aba desmonta a WebView e descarta sua sessão local.</Text></View></View>
+        </ScrollView><Pressable accessibilityRole="button" accessibilityLabel="Abrir nova aba privada" onPress={openNewTab} style={styles.sheetAction}><Ionicons name="add-circle-outline" size={20} color={COLORS.text} /><Text style={styles.sheetActionText}>Nova aba privada</Text></Pressable><Text style={styles.sheetFootnote}>Fechar uma aba desmonta sua leitura nativa e descarta os dados da sessão.</Text></View></View>
       </Modal>
 
       <Modal visible={showHistory} transparent animationType="slide" onRequestClose={() => setShowHistory(false)}>
@@ -476,7 +491,7 @@ export default function HomeScreen() {
       </Modal>
 
       <Modal visible={showPrivacyInfo} transparent animationType="fade" onRequestClose={() => setShowPrivacyInfo(false)}>
-        <View style={styles.modalBackdrop}><Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPrivacyInfo(false)} /><View style={styles.infoCard}><View style={styles.infoIcon}><Ionicons name="shield-checkmark" size={24} color={COLORS.text} /></View><Text style={styles.sheetEyebrow}>TRANSPARÊNCIA PRIMEIRO</Text><Text style={styles.infoTitle}>O que o Noctra protege</Text><Text style={styles.infoCopy}>Abas usam WebView em modo incógnito, cache desativado e armazenamento local reduzido. A camada básica bloqueia endpoints conhecidos de rastreamento, mas não substitui um bloqueador de conteúdo completo.</Text><Text style={styles.infoCopy}>O Noctra ainda não roteia tráfego pela rede Tor. Para anonimato em nível Tor, será necessária uma integração real com proxy ou rede Tor.</Text><Pressable onPress={() => setShowPrivacyInfo(false)} style={styles.infoButton}><Text style={styles.infoButtonText}>Entendi</Text></Pressable><Pressable onPress={() => { setShowPrivacyInfo(false); Linking.openURL("https://support.torproject.org/"); }} style={styles.infoLink}><Text style={styles.infoLinkText}>Saiba mais sobre Tor</Text><Ionicons name="open-outline" size={15} color={COLORS.pink} /></Pressable></View></View>
+        <View style={styles.modalBackdrop}><Pressable style={StyleSheet.absoluteFill} onPress={() => setShowPrivacyInfo(false)} /><View style={styles.infoCard}><View style={styles.infoIcon}><Ionicons name="shield-checkmark" size={24} color={COLORS.text} /></View><Text style={styles.sheetEyebrow}>TRANSPARÊNCIA PRIMEIRO</Text><Text style={styles.infoTitle}>O que o Noctra protege</Text><Text style={styles.infoCopy}>Abas usam leitura nativa, cache desativado e armazenamento local reduzido. A camada básica bloqueia endpoints conhecidos de rastreamento, mas não substitui um bloqueador de conteúdo completo.</Text><Text style={styles.infoCopy}>O Noctra ainda não roteia tráfego pela rede Tor. Para anonimato em nível Tor, será necessária uma integração real com proxy ou rede Tor.</Text><Pressable onPress={() => setShowPrivacyInfo(false)} style={styles.infoButton}><Text style={styles.infoButtonText}>Entendi</Text></Pressable><Pressable onPress={() => { setShowPrivacyInfo(false); Linking.openURL("https://support.torproject.org/"); }} style={styles.infoLink}><Text style={styles.infoLinkText}>Saiba mais sobre Tor</Text><Ionicons name="open-outline" size={15} color={COLORS.pink} /></Pressable></View></View>
       </Modal>
     </ScreenContainer>
   );
@@ -521,6 +536,17 @@ const styles = StyleSheet.create({
   searchStateTitle: { color: COLORS.text, fontSize: 16, fontWeight: "800", marginTop: 12, textAlign: "center" },
   searchStateCopy: { color: COLORS.muted, fontSize: 12, lineHeight: 18, marginTop: 6, maxWidth: 270, textAlign: "center" },
   noResults: { alignItems: "center", paddingHorizontal: 18, paddingVertical: 45 },
+  pageContent: { padding: 20, paddingBottom: 34 },
+  pageHeader: { borderBottomColor: COLORS.line, borderBottomWidth: 1, paddingBottom: 18 },
+  pageEyebrow: { color: COLORS.pink, fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
+  pageTitle: { color: COLORS.text, fontSize: 24, fontWeight: "800", lineHeight: 30, marginTop: 7 },
+  pageDomain: { color: COLORS.purpleSoft, fontSize: 11, marginTop: 6 },
+  pageLead: { color: COLORS.muted, fontSize: 13, lineHeight: 20, marginTop: 14 },
+  pageParagraph: { color: COLORS.text, fontSize: 15, lineHeight: 24, marginTop: 18 },
+  nativeLinks: { borderTopColor: COLORS.line, borderTopWidth: 1, marginTop: 26, paddingTop: 17 },
+  linksTitle: { color: COLORS.text, fontSize: 15, fontWeight: "800", marginBottom: 9 },
+  nativeLink: { alignItems: "center", backgroundColor: COLORS.fieldSoft, borderRadius: 13, flexDirection: "row", gap: 9, marginTop: 7, padding: 12 },
+  nativeLinkText: { color: COLORS.text, flex: 1, fontSize: 12, lineHeight: 17 },
   emptyState: { alignItems: "center", flex: 1, justifyContent: "center", paddingHorizontal: 32 },
   logoOrb: { alignItems: "center", backgroundColor: COLORS.purple, borderColor: COLORS.pink, borderRadius: 52, borderWidth: 5, height: 104, justifyContent: "center", marginBottom: 26, shadowColor: COLORS.pink, shadowOpacity: 0.6, shadowRadius: 24, width: 104 },
   logoOrbInner: { alignItems: "center", justifyContent: "center" },
