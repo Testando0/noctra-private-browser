@@ -63,7 +63,7 @@ const config = {
   name: env.appName,
   slug: env.appSlug,
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519663974858310/XPfYdLwfHbOJNuvk.png",
-  version: "1.0.0",
+  version: "1.0.1",
   extra: publicRuntime,
   orientation: "portrait",
   icon: "./assets/images/icon.png",
@@ -85,6 +85,7 @@ const config = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
+    versionCode: 2,
     permissions: ["POST_NOTIFICATIONS"],
     intentFilters: [
       {
